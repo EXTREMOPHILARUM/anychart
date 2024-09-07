@@ -1,0 +1,16 @@
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kubecanvas.fullname" . }}
+  labels:
+    {{- include "kubecanvas.labels" . | nindent 4 }}
+  annotations:
+    kubecanvas.io/service-type: {{ .Values.service.type }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    {{- toYaml .Values.service.ports | nindent 4 }}
+  selector:
+    {{- include "kubecanvas.selectorLabels" . | nindent 4 }}
+

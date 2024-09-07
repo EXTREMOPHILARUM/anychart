@@ -1,0 +1,19 @@
+apiVersion: v2
+name: kubecanvas
+description: A universal Helm chart for painting your Kubernetes deployments with ease and flexibility
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+home: https://github.com/extremophilarum/kubecanvas
+sources:
+  - https://github.com/extremophilarum/kubecanvas
+maintainers:
+  - name: Saurabh Nandedkar
+    email: extremmophilarum@gmail.com
+keywords:
+  - kubernetes
+  - deployment
+  - universal
+  - flexible
+annotations:
+  category: Infrastructure
