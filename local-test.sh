@@ -15,57 +15,111 @@ print_color() {
     echo -e "${color}${message}${NC}"
 }
 
-# Check if Helm is installed
-if ! command -v helm &> /dev/null; then
-    print_color $RED "Helm is not installed. Please install Helm first."
-    exit 1
-fi
+# Check and install dependencies
+check_and_install() {
+    if ! command -v $1 &> /dev/null; then
+        print_color $YELLOW "$1 is not installed. Installing it now..."
+        bash -c "$(cat << EOF
+$2
+EOF
+)"
+    fi
+}
 
-# Check if chart-testing (ct) is installed
-if ! command -v ct &> /dev/null; then
-    print_color $YELLOW "chart-testing (ct) is not installed. Installing it now..."
-    curl -LO https://github.com/helm/chart-testing/releases/download/v3.11.0/chart-testing_3.11.0_linux_amd64.tar.gz
-    tar -xzvf chart-testing_3.11.0_linux_amd64.tar.gz
-    sudo mv ct /usr/local/bin/
-    rm chart-testing_3.11.0_linux_amd64.tar.gz
-fi
+check_and_install helm "curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"
+check_and_install python3 "sudo apt-get update && sudo apt-get install -y python3 python3-pip"
+check_and_install pip3 "sudo apt-get update && sudo apt-get install -y python3-pip"
+check_and_install docker "curl -fsSL https://get.docker.com | sh"
+check_and_install kind "
+curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+chmod +x ./kind
+sudo mv ./kind /usr/local/bin/
+"
+check_and_install ct "
+curl -LO https://github.com/helm/chart-testing/releases/download/v3.11.0/chart-testing_3.11.0_linux_amd64.tar.gz
+tar -xzvf chart-testing_3.11.0_linux_amd64.tar.gz
+sudo mv ct /usr/local/bin/
+rm chart-testing_3.11.0_linux_amd64.tar.gz
+"
+
+pip3 install yamale yamllint
+
+# Print environment information
+print_color $YELLOW "Environment Information:"
+echo "Helm version: $(helm version --short)"
+echo "Python version: $(python3 --version)"
+echo "chart-testing version: $(ct version)"
+echo "KinD version: $(kind version)"
+echo "Current directory: $(pwd)"
+echo "Contents of current directory:"
+ls -la
 
 # Lint the chart
 print_color $YELLOW "Linting the Helm chart..."
-if helm lint .; then
-    print_color $GREEN "Helm lint passed successfully."
-else
-    print_color $RED "Helm lint failed."
-    exit 1
-fi
+helm lint . || { print_color $RED "Helm lint failed."; exit 1; }
+print_color $GREEN "Helm lint passed successfully."
 
 # Run chart-testing lint
 print_color $YELLOW "Running chart-testing lint..."
-if ct lint --config ct.yaml; then
-    print_color $GREEN "chart-testing lint passed successfully."
-else
-    print_color $RED "chart-testing lint failed."
+ct lint --config ct.yaml --charts . || {
+    print_color $RED "chart-testing lint failed. Here's more detailed output:"
+    ct lint --config ct.yaml --charts . --debug
     exit 1
-fi
+}
+print_color $GREEN "chart-testing lint passed successfully."
 
-# Perform a dry-run installation
-print_color $YELLOW "Performing a dry-run installation..."
-if helm install --dry-run --debug kubecanvas .; then
-    print_color $GREEN "Dry-run installation successful."
-else
-    print_color $RED "Dry-run installation failed."
-    exit 1
-fi
+# Create KinD cluster
+print_color $YELLOW "Creating KinD cluster..."
+cat <<EOF > kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: ipv4
+EOF
 
-# If using Kubernetes, you can uncomment these lines to test against a real cluster
-# print_color $YELLOW "Installing chart in Kubernetes cluster..."
-# if helm install kubecanvas . --namespace test --create-namespace; then
-#     print_color $GREEN "Chart installed successfully in the cluster."
-#     helm uninstall kubecanvas --namespace test
-#     kubectl delete namespace test
-# else
-#     print_color $RED "Chart installation in cluster failed."
-#     exit 1
-# fi
+kind create cluster --name helm-test --config kind-config.yaml || {
+    print_color $RED "Failed to create KinD cluster. Attempting to delete existing cluster..."
+    kind delete cluster --name helm-test
+    print_color $YELLOW "Retrying cluster creation..."
+    kind create cluster --name helm-test --config kind-config.yaml || { 
+        print_color $RED "Failed to create KinD cluster after retry. Exiting."; 
+        exit 1; 
+    }
+}
+print_color $GREEN "KinD cluster created successfully."
+
+# Set kubectl context to the new cluster
+kubectl cluster-info --context kind-helm-test
+
+# Perform installation
+print_color $YELLOW "Performing installation on the KinD cluster..."
+helm install kubecanvas . || { print_color $RED "Installation failed."; kind delete cluster --name helm-test; exit 1; }
+print_color $GREEN "Installation successful."
+
+# Wait for pods to be ready
+print_color $YELLOW "Waiting for pods to be ready..."
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kubecanvas --timeout=300s || { 
+    print_color $RED "Pods did not become ready in time."; 
+    helm uninstall kubecanvas;
+    kind delete cluster --name helm-test; 
+    exit 1; 
+}
+print_color $GREEN "All pods are ready."
+
+# Run tests
+print_color $YELLOW "Running Helm tests..."
+helm test kubecanvas || { 
+    print_color $RED "Helm tests failed."; 
+    helm uninstall kubecanvas;
+    kind delete cluster --name helm-test; 
+    exit 1; 
+}
+print_color $GREEN "Helm tests passed successfully."
+
+# Clean up
+print_color $YELLOW "Cleaning up..."
+helm uninstall kubecanvas
+kind delete cluster --name helm-test
+print_color $GREEN "Cleanup completed."
 
 print_color $GREEN "All tests passed successfully!"

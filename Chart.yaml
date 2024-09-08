@@ -1,3 +1,4 @@
+---
 apiVersion: v2
 name: kubecanvas
 description: A universal Helm chart for painting your Kubernetes deployments with ease and flexibility

@@ -1,0 +1,140 @@
+---
+nameOverride: ""
+fullnameOverride: ""
+
+deployment:
+  replicaCount: 2
+
+  containers:
+    - name: web-app
+      image:
+        repository: nginx
+        pullPolicy: IfNotPresent
+        tag: "1.21.0"
+      ports:
+        - containerPort: 80
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+      env:
+        - name: LOG_LEVEL
+          value: "info"
+        - name: API_URL
+          value: "https://api.example.com"
+
+    - name: cache
+      image:
+        repository: redis
+        pullPolicy: IfNotPresent
+        tag: "6.2.5"
+      ports:
+        - containerPort: 6379
+      resources:
+        limits:
+          cpu: 50m
+          memory: 64Mi
+        requests:
+          cpu: 25m
+          memory: 32Mi
+
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "80"
+
+  podSecurityContext:
+    fsGroup: 2000
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/my-app-role
+  name: ""
+
+service:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+      name: http
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+      name: redis
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: myapp.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: myapp-tls
+      hosts:
+        - myapp.example.com
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector:
+  kubernetes.io/os: linux
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "web-app"
+    effect: "NoSchedule"
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - web-app
+          topologyKey: kubernetes.io/hostname
+
+persistence:
+  enabled: true
+  storageClass: "standard"
+  accessMode: ReadWriteOnce
+  size: 1Gi
+
+configMap:
+  enabled: true
+  data:
+    APP_CONFIG: |
+      {
+        "feature_flags": {
+          "new_ui": true,
+          "beta_features": false
+        },
+        "cache_ttl": 300
+      }
+
+secret:
+  enabled: true
+  type: Opaque
+  data:
+    API_KEY: bXlzZWNyZXRhcGlrZXk=  # base64 encoded "mysecretapikey"
+    DB_PASSWORD: cGFzc3dvcmQxMjM=  # base64 encoded "password123"
